@@ -20,7 +20,8 @@ class AudioRecorderActivity :AppCompatActivity(){
         super.onCreate(savedInstanceState)
         binding = ActivityAudioRecorderBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        val outputPath =  filesDir.absolutePath + "/vocal.pcm"
+
+        val outputPath =   getExternalFilesDir(null)?.absolutePath + "/vocal.pcm"
         mAudioRecorder.setConsumer(PCMFileConsumer(outputPath))
         binding.btnRecord.setOnClickListener{
             if (mRecording){
