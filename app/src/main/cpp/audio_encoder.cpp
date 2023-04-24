@@ -52,10 +52,28 @@ int AudioEncoder::init(int bitRate, int channels, int sampleRate, int bitsPerSam
 }
 
 void AudioEncoder::encode(byte *buffer, int size) {
+    int bufferCursor=0;
+
+    while (size>=bufferSize-samplesCursor){
+        int copySize=bufferSize-samplesCursor;
+        memcpy(samples+samplesCursor,buffer+bufferCursor,copySize);
+        bufferCursor+=copySize;
+        size-=copySize;
+
+        long long beginEncodeTimestamp=getCurrentTimestamp();
+        encodePacket();
+        totalEncodeTimeMills+=getCurrentTimestamp()-beginEncodeTimestamp;
+        samplesCursor=0;
+    }
+
+    if (size>0){
+        memcpy(samples+samplesCursor,buffer+bufferCursor,size);
+        samplesCursor+=size;
+    }
 
 }
 
-void AudioEncoder::destroy() {
+void AudioEncoder::encodePacket() {
 
 }
 
@@ -182,8 +200,116 @@ int AudioEncoder::allocAvFrame() {
         LOGI("can't alloc avframe");
         return -1;
     }
-
+    /**
+    * number of audio samples (per channel) described by this frame
+    */
     inputFrame->nb_samples=avCodecContext->frame_size;
+    /**
+     * format of the frame, -1 if unknown or unset
+     * Values correspond to enum AVPixelFormat for video frames,
+     * enum AVSampleFormat for audio)
+     */
+    inputFrame->format=AV_SAMPLE_FMT_S16;
+    inputFrame->channel_layout= channels==1?AV_CH_LAYOUT_MONO:AV_CH_LAYOUT_STEREO;
+    inputFrame->sample_rate=sampleRate;
+    /**
+     * Get the required buffer size for the given audio parameters.
+     */
+    bufferSize=av_samples_get_buffer_size(nullptr, av_get_channel_layout_nb_channels(inputFrame->channel_layout), inputFrame->nb_samples,
+                               AV_SAMPLE_FMT_S16, 0);
+
+    samples= static_cast<uint8_t *>(av_malloc(bufferSize));
+    samplesCursor=0;
+    if(!samples){
+        LOGI("can't allocate bytes for samples");
+        return -1;
+    }
+    /**
+     * Fill AVFrame audio data and linesize pointers.
+     */
+    int ret=avcodec_fill_audio_frame(inputFrame, av_get_channel_layout_nb_channels(inputFrame->channel_layout),AV_SAMPLE_FMT_S16,samples,bufferSize,0);
+    if (ret<0){
+        LOGI("avcodec_fill_audio_frame error");
+        return -1;
+    }
+    if(swrContext){
+        /**
+         * Check if the sample format is planar.
+         * @param sample_fmt the sample format to inspect
+         * @return 1 if the sample format is planar, 0 if it is interleaved
+         */
+        //av_sample_fmt_is_planar()
+
+        convertData= static_cast<uint8_t **>(calloc(avCodecContext->channels, sizeof(*convertData)));
+        /**
+         * Allocate a samples buffer for nb_samples samples, and fill data pointers and
+         * linesize accordingly.
+         * The allocated samples buffer can be freed by using av_freep(&audio_data[0])
+         * Allocated data will be initialized to silence.
+         */
+        ret=av_samples_alloc(convertData, nullptr,avCodecContext->channels,avCodecContext->frame_size,avCodecContext->sample_fmt,0);
+        if (ret<0){
+            LOGI("av_samples_alloc error");
+        }
+        swrBufferSize=av_samples_get_buffer_size(nullptr,avCodecContext->channels,avCodecContext->frame_size,avCodecContext->sample_fmt,0);
+        swrBuffer= static_cast<uint8_t *>(av_malloc(swrBufferSize));
+
+        swrFrame=av_frame_alloc();
+        if (swrFrame== nullptr){
+            LOGI("av_frame_alloc error");
+            return -1;
+        }
+        swrFrame->nb_samples=avCodecContext->frame_size;
+        swrFrame->format=avCodecContext->sample_rate;
+        swrFrame->channel_layout=avCodecContext->channels==1?AV_CH_LAYOUT_MONO:AV_CH_LAYOUT_STEREO;
+        swrFrame->sample_rate=avCodecContext->sample_rate;
+        ret=avcodec_fill_audio_frame(swrFrame,avCodecContext->channels,avCodecContext->sample_fmt,swrBuffer,swrBufferSize,0);
+        if (ret<0){
+            LOGI("avcodec_fill_audio_frame error");
+            return -1;
+        }
+    }
 
     return 0;
 }
+
+void AudioEncoder::destroy() {
+    if (swrBuffer!= nullptr){
+        av_freep(swrBuffer);
+        swrBuffer= nullptr;
+        swrBufferSize=0;
+    }
+    if (swrContext!= nullptr){
+        swr_free(&swrContext);
+        swrContext= nullptr;
+    }
+    if (convertData!= nullptr){
+        av_freep(&convertData[0]);
+        free(convertData);
+    }
+
+    if (swrFrame!= nullptr){
+        av_frame_free(&swrFrame);
+    }
+    if(samples!= nullptr){
+        av_freep(&samples);
+    }
+    if (inputFrame!= nullptr){
+        av_frame_free(&inputFrame);
+    }
+
+    if (isWriteHeaderSuccess){
+        avFormatContext->duration=duration*AV_TIME_BASE;
+        av_write_trailer(avFormatContext);
+    }
+    if (avCodecContext!= nullptr){
+        avcodec_close(avCodecContext);
+        av_free(avCodecContext);
+    }
+    if (avCodecContext!= nullptr && avFormatContext->pb!= nullptr){
+        avio_close(avFormatContext->pb);
+    }
+
+}
+
+

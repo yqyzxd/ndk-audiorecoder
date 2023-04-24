@@ -6,7 +6,7 @@
 #define NDK_AUDIORECODER_AUDIO_ENCODER_H
 #include "types.h"
 #include "log.h"
-
+#include "utils.h"
 
 extern "C"{
 #include "libavformat/avformat.h"
@@ -27,6 +27,20 @@ private:
     SwrContext* swrContext;
     AVFrame* inputFrame;
 
+    int bufferSize;
+    uint8_t* samples;
+    int samplesCursor;
+
+    int swrBufferSize;
+    uint8_t* swrBuffer;
+    AVFrame* swrFrame;
+
+    //音频时长
+    double duration;
+    double totalEncodeTimeMills;
+
+    uint8_t** convertData;
+
     //通道数
     int channels;
     //采样率
@@ -44,6 +58,8 @@ public:
 
     int allocAudioStream(const char *codecName);
     int allocAvFrame();
+
+    void encodePacket();
 };
 
 
