@@ -74,7 +74,48 @@ void AudioEncoder::encode(byte *buffer, int size) {
 }
 
 void AudioEncoder::encodePacket() {
+    AVPacket pkt;
+    av_init_packet(&pkt);
+    AVFrame* encodeFrame;
+    if(swrContext){
 
+    }else{
+        encodeFrame=inputFrame;
+    }
+
+    pkt.stream_index=0;
+    pkt.duration=AV_NOPTS_VALUE;
+    pkt.pts=pkt.dts=0;
+    pkt.data=samples;
+    pkt.size=bufferSize;
+
+    //@deprecated use avcodec_send_frame()/avcodec_receive_packet() instead
+    // avcodec_encode_audio2()
+
+    int ret=avcodec_send_frame(avCodecContext,encodeFrame);
+    if (ret<0){
+        LOGE("avcodec_send_frame error return %d",ret);
+        return;
+    }
+    ret=avcodec_receive_packet(avCodecContext,&pkt);
+    if (ret<0){
+        LOGE("avcodec_receive_packet error return %d",ret);
+        return;
+    }
+    writeAACPacketToFile(pkt.data,pkt.size);
+    if (avCodecContext->coded_frame&& avCodecContext->coded_frame->pts!=AV_NOPTS_VALUE){
+        //todo pts为什么是这么设置？ a * bq / cq
+        pkt.pts= av_rescale_q(avCodecContext->coded_frame->pts,avCodecContext->time_base,audioStream->time_base);
+    }
+    //为什么要加flags
+    pkt.flags |=AV_PKT_FLAG_KEY;
+    //
+    this->duration=pkt.pts * av_q2d(audioStream->time_base);
+    //此函数负责交错地输出一个媒体包。如果调用者无法保证来自各个媒体流的包正确交错，则最好调用此函数输出媒体包，反之，可以调用av_write_frame以提高性能。
+    av_interleaved_write_frame(avFormatContext,&pkt);
+
+    //释放avPacket
+    av_packet_unref(&pkt);
 }
 
 int AudioEncoder::allocAudioStream(const char *codecName) {
@@ -175,7 +216,7 @@ int AudioEncoder::allocAudioStream(const char *codecName) {
         LOGI("can't open codec,please check");
         return -1;
     }
-
+    //设置timebase
     avCodecContext.time_base.num=1;
     avCodecContext.time_base.den=avCodecContext.sample_rate;
     avCodecContext.frame_size=1024;//每个frame的大小
