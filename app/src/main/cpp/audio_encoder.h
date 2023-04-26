@@ -38,6 +38,7 @@ private:
     //音频时长
     double duration;
     double totalEncodeTimeMills;
+    double totalSWRTimeMills;
 
     uint8_t** convertData;
 
@@ -50,6 +51,9 @@ private:
 
     bool isWriteHeaderSuccess;
 
+    char* outputAACPath;
+    FILE* outputAACFile;
+
 public:
     int init(int bitRate, int channels ,int sampleRate,int bitsPerSample,const char* aacFilePath,const char* codecName);
     void encode(byte* buffer,int size);
@@ -60,6 +64,10 @@ public:
     int allocAvFrame();
 
     void encodePacket();
+
+    void writeAACPacketToFile(uint8_t *data, int size);
+
+    void addADTSToPacket(uint8_t *buffer, int size);
 };
 
 

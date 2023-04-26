@@ -14,6 +14,10 @@ int AudioEncoder::init(int bitRate, int channels, int sampleRate, int bitsPerSam
     this->channels=channels;
     this->sampleRate=sampleRate;
 
+    outputAACPath=new char[strlen(aacFilePath)+1];
+    strcpy(outputAACPath,aacFilePath);
+
+    outputAACFile= fopen(aacFilePath,"wb+");
 
     avFormatContext = avformat_alloc_context();
 
@@ -52,6 +56,7 @@ int AudioEncoder::init(int bitRate, int channels, int sampleRate, int bitsPerSam
 }
 
 void AudioEncoder::encode(byte *buffer, int size) {
+
     int bufferCursor=0;
 
     while (size>=bufferSize-samplesCursor){
@@ -78,7 +83,18 @@ void AudioEncoder::encodePacket() {
     av_init_packet(&pkt);
     AVFrame* encodeFrame;
     if(swrContext){
-
+        long long beginSWRTimestamp=getCurrentTimestamp();
+        const uint8_t** in=   (const uint8_t**)inputFrame->data;
+        swr_convert(swrContext, convertData, avCodecContext->frame_size,
+                    in , avCodecContext->frame_size);
+        int length=avCodecContext->frame_size * av_get_bytes_per_sample(avCodecContext->sample_fmt);
+        for (int i = 0; i < 2; ++i) {
+            for (int j = 0; j < length; ++j) {
+                swrFrame->data[i][j]=convertData[i][j];
+            }
+        }
+        totalSWRTimeMills+=(getCurrentTimestamp()-beginSWRTimestamp);
+        encodeFrame=swrFrame;
     }else{
         encodeFrame=inputFrame;
     }
@@ -116,6 +132,29 @@ void AudioEncoder::encodePacket() {
 
     //释放avPacket
     av_packet_unref(&pkt);
+}
+void AudioEncoder::writeAACPacketToFile(uint8_t *data, int size) {
+    uint8_t* buffer=new uint8_t[size+7];
+    memset(buffer,0,size+1);
+    memcpy(buffer+7,data,size);
+    addADTSToPacket(buffer,size+7);
+    fwrite(buffer,sizeof(uint8_t),size+7,outputAACFile);
+
+}
+
+void AudioEncoder::addADTSToPacket(uint8_t *buffer, int size) {
+    int profile = 29;//2 : LC; 5 : HE-AAC; 29: HEV2
+    int freqIdx = 3; // 48KHz  44100对应的值是4
+    int chanCfg = 1; // Mono
+
+    // fill in ADTS data
+    buffer[0] = (unsigned char) 0xFF;
+    buffer[1] = (unsigned char) 0xF1;
+    buffer[2] = (unsigned char) (((profile - 1) << 6) + (freqIdx << 2) + (chanCfg >> 2)); //(unsigned char) 0x58;
+    buffer[3] = (unsigned char) (((chanCfg & 3) << 6) + (size >> 11));
+    buffer[4] = (unsigned char) ((size & 0x7FF) >> 3);
+    buffer[5] = (unsigned char) (((size & 7) << 5) + 0x1F);
+    buffer[6] = (unsigned char) 0xFC;
 }
 
 int AudioEncoder::allocAudioStream(const char *codecName) {
@@ -352,5 +391,8 @@ void AudioEncoder::destroy() {
     }
 
 }
+
+
+
 
 
