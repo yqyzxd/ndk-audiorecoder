@@ -8,14 +8,15 @@
 #include "log.h"
 #include "utils.h"
 
+
+
 extern "C"{
+#include "libswresample/swresample.h"
 #include "libavformat/avformat.h"
 #include "libavcodec/avcodec.h"
-#include "libavutil/avutil.h"
-#include "libavutil/channel_layout.h"
-#include "libavutil/samplefmt.h"
-#include "libswresample/swresample.h"
 };
+
+
 
 #define BITE_RATE 64000
 

@@ -7,7 +7,6 @@
 
 
 #include <sys/time.h>
-#include "thirdparty/ffmpeg/include/libavformat/avformat.h"
 
 //毫秒
 static inline long long getCurrentTimestamp(){

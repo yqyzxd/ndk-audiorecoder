@@ -24,6 +24,7 @@
             </intent-filter>
         </activity>
         <activity android:name=".AudioRecorderActivity"/>
+        <activity android:name=".AudioEncoderActivity"/>
     </application>
 
 </manifest>

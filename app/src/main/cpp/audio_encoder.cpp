@@ -3,13 +3,22 @@
 //
 
 #include "audio_encoder.h"
-#include "thirdparty/ffmpeg/include/libswresample/swresample.h"
 
 
 #define LOG_TAG "AudioEncoder"
 int AudioEncoder::init(int bitRate, int channels, int sampleRate, int bitsPerSample,
                        const char *aacFilePath, const char *codecName) {
-    //
+
+    swrBuffer= nullptr;
+    swrContext= nullptr;
+    convertData= nullptr;
+    swrFrame= nullptr;
+    inputFrame= nullptr;
+    samples= nullptr;
+    avCodecContext= nullptr;
+    audioStream= nullptr;
+    isWriteHeaderSuccess= false;
+
     this->bitRate=bitRate;
     this->channels=channels;
     this->sampleRate=sampleRate;
@@ -36,8 +45,11 @@ int AudioEncoder::init(int bitRate, int channels, int sampleRate, int bitsPerSam
         return -1;
     }
     //创建AudioStream
-    allocAudioStream(codecName);
-
+    ret=allocAudioStream(codecName);
+    if (ret < 0) {
+        LOGI("allocAudioStream error");
+        return -1;
+    }
     //Print detailed information about the input or output format, such as
     //duration, bitrate, streams, container, programs, metadata, side data,
     //codec and time base.
@@ -45,6 +57,7 @@ int AudioEncoder::init(int bitRate, int channels, int sampleRate, int bitsPerSam
 
     ret = avformat_write_header(avFormatContext, nullptr);
     if (ret < 0) {
+        LOGI("avformat_write_header error");
         return -1;
     }
     isWriteHeaderSuccess=true;
@@ -81,8 +94,10 @@ void AudioEncoder::encode(byte *buffer, int size) {
 void AudioEncoder::encodePacket() {
     AVPacket pkt;
     av_init_packet(&pkt);
+    //av_packet_alloc
     AVFrame* encodeFrame;
     if(swrContext){
+        LOGI("exist swrContext");
         long long beginSWRTimestamp=getCurrentTimestamp();
         const uint8_t** in=   (const uint8_t**)inputFrame->data;
         swr_convert(swrContext, convertData, avCodecContext->frame_size,
@@ -107,31 +122,37 @@ void AudioEncoder::encodePacket() {
 
     //@deprecated use avcodec_send_frame()/avcodec_receive_packet() instead
     // avcodec_encode_audio2()
-
+    LOGI("avcodec_send_frame");
     int ret=avcodec_send_frame(avCodecContext,encodeFrame);
     if (ret<0){
         LOGE("avcodec_send_frame error return %d",ret);
         return;
     }
-    ret=avcodec_receive_packet(avCodecContext,&pkt);
-    if (ret<0){
-        LOGE("avcodec_receive_packet error return %d",ret);
-        return;
+    while (ret>=0){
+        ret=avcodec_receive_packet(avCodecContext,&pkt);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF){
+            LOGI("avcodec_receive_packet eagain || eof %d",ret);
+            return;
+        }else if (ret<0){
+            LOGE("avcodec_receive_packet error return %d",ret);
+            return;
+        }
+        //writeAACPacketToFile(pkt.data,pkt.size);
+        if (avCodecContext->coded_frame&& avCodecContext->coded_frame->pts!=AV_NOPTS_VALUE){
+            //todo pts为什么是这么设置？ a * bq / cq
+            pkt.pts= av_rescale_q(avCodecContext->coded_frame->pts,avCodecContext->time_base,audioStream->time_base);
+        }
+        //为什么要加flags
+        pkt.flags |=AV_PKT_FLAG_KEY;
+        //
+        this->duration=pkt.pts * av_q2d(audioStream->time_base);
+        //此函数负责交错地输出一个媒体包。如果调用者无法保证来自各个媒体流的包正确交错，则最好调用此函数输出媒体包，反之，可以调用av_write_frame以提高性能。
+        av_interleaved_write_frame(avFormatContext,&pkt);
+        LOGI("av_interleaved_write_frame");
+        //释放avPacket
+        av_packet_unref(&pkt);
     }
-    writeAACPacketToFile(pkt.data,pkt.size);
-    if (avCodecContext->coded_frame&& avCodecContext->coded_frame->pts!=AV_NOPTS_VALUE){
-        //todo pts为什么是这么设置？ a * bq / cq
-        pkt.pts= av_rescale_q(avCodecContext->coded_frame->pts,avCodecContext->time_base,audioStream->time_base);
-    }
-    //为什么要加flags
-    pkt.flags |=AV_PKT_FLAG_KEY;
-    //
-    this->duration=pkt.pts * av_q2d(audioStream->time_base);
-    //此函数负责交错地输出一个媒体包。如果调用者无法保证来自各个媒体流的包正确交错，则最好调用此函数输出媒体包，反之，可以调用av_write_frame以提高性能。
-    av_interleaved_write_frame(avFormatContext,&pkt);
 
-    //释放avPacket
-    av_packet_unref(&pkt);
 }
 void AudioEncoder::writeAACPacketToFile(uint8_t *data, int size) {
     uint8_t* buffer=new uint8_t[size+7];
@@ -166,48 +187,56 @@ int AudioEncoder::allocAudioStream(const char *codecName) {
    */
     audioStream->id=1;
 
+    AVCodec* codec=avcodec_find_encoder_by_name(codecName);
+    if (codec== nullptr){
+        codec= avcodec_find_encoder( AV_CODEC_ID_AAC);
+        if(codec== nullptr){
+            return -1;
+        }
 
+    }
+    avCodecContext = avcodec_alloc_context3(codec);
+    if (avCodecContext == nullptr){
+        LOGI("avcodec_alloc_context3 error");
+        return -1;
+    }
 
-    AVCodecContext avCodecContext;
+    avCodecContext->codec_id=codec->id;
+    avCodecContext->codec_type= AVMEDIA_TYPE_AUDIO;
+    avCodecContext->sample_rate=sampleRate;
 
-    avCodecContext.codec_type= AVMEDIA_TYPE_AUDIO;
-    avCodecContext.sample_rate=sampleRate;
-    avCodecContext.channels=channels;
     if (bitRate<=0){
         bitRate=BITE_RATE;
     }
-    avCodecContext.bit_rate=bitRate;
+    avCodecContext->bit_rate=bitRate;
     //设置sampleFmt
-    avCodecContext.sample_fmt=AV_SAMPLE_FMT_S16;
+    avCodecContext->sample_fmt=AV_SAMPLE_FMT_S16;
     //设置通道信息
-    avCodecContext.channel_layout=channels==1?AV_CH_LAYOUT_MONO:AV_CH_LAYOUT_STEREO;
-    avCodecContext.channels= av_get_channel_layout_nb_channels(avCodecContext.channel_layout);
+    avCodecContext->channel_layout=channels==1?AV_CH_LAYOUT_MONO:AV_CH_LAYOUT_STEREO;
+    avCodecContext->channels= av_get_channel_layout_nb_channels(avCodecContext->channel_layout);
     // encoding: Set by user.
     // decoding: Set by libavcodec.
-    avCodecContext.profile = FF_PROFILE_AAC_HE;
+    avCodecContext->profile = FF_PROFILE_AAC_HE;
     //* Place global headers in extradata instead of every keyframe.
-    avCodecContext.flags |=AV_CODEC_FLAG_GLOBAL_HEADER;
+    avCodecContext->flags |=AV_CODEC_FLAG_GLOBAL_HEADER;
 
 
 
-    AVCodec* codec=avcodec_find_encoder_by_name(codecName);
-    if (codec== nullptr){
-        return -1;
-    }
-    avCodecContext.codec_id=codec->id;
+
+
 
     //设置最合适的sampleFormat
     //array of supported sample formats, or NULL if unknown, array is terminated by -1
     const enum  AVSampleFormat* avSampleFormats=codec->sample_fmts;
     if (avSampleFormats){
         for (; *avSampleFormats!=-1 ; avSampleFormats++) {
-            if (*avSampleFormats == avCodecContext.sample_fmt){
+            if (*avSampleFormats == avCodecContext->sample_fmt){
                 break;
             }
         }
         if ( *avSampleFormats==-1){
             LOGI("sample fmt not supported,user the codec supported sample fmt ");
-            avCodecContext.sample_fmt=codec->sample_fmts[0];
+            avCodecContext->sample_fmt=codec->sample_fmts[0];
         }
     }
 
@@ -218,22 +247,27 @@ int AudioEncoder::allocAudioStream(const char *codecName) {
         int best=0;
         int best_dist=INT_MAX;
         for (; *sampleRates ; sampleRates++) {
-            int dist= abs(avCodecContext.sample_rate-*sampleRates);
+            int dist= abs(avCodecContext->sample_rate-*sampleRates);
             if (dist<best_dist){
                 best_dist=dist;
                 best=*sampleRates;
             }
         }
 
-        avCodecContext.sample_rate=best;
+        avCodecContext->sample_rate=best;
     }
 
-    if (channels !=avCodecContext.channels
-        || sampleRate!=avCodecContext.sample_rate
-        || AV_SAMPLE_FMT_S16!=avCodecContext.sample_fmt){
+    if (channels !=avCodecContext->channels
+        || sampleRate!=avCodecContext->sample_rate
+        || AV_SAMPLE_FMT_S16!=avCodecContext->sample_fmt){
+        LOGI("channels is {%d, %d}", avCodecContext->channels, audioStream->codec->channels);
+        LOGI("sample_rate is {%d, %d}", avCodecContext->sample_rate, audioStream->codec->sample_rate);
+        LOGI("sample_fmt is {%d, %d}", avCodecContext->sample_fmt, audioStream->codec->sample_fmt);
+        LOGI("AV_SAMPLE_FMT_S16P is %d AV_SAMPLE_FMT_S16 is %d AV_SAMPLE_FMT_FLTP is %d", AV_SAMPLE_FMT_S16P, AV_SAMPLE_FMT_S16, AV_SAMPLE_FMT_FLTP);
+
         swrContext=swr_alloc_set_opts(nullptr,
-                                                  av_get_default_channel_layout(avCodecContext.channels),
-                                                  avCodecContext.sample_fmt,avCodecContext.sample_rate,
+                                                  av_get_default_channel_layout(avCodecContext->channels),
+                                                  avCodecContext->sample_fmt,avCodecContext->sample_rate,
                                                   av_get_default_channel_layout(channels),
                                                   AV_SAMPLE_FMT_S16,
                                                   sampleRate,
@@ -250,24 +284,25 @@ int AudioEncoder::allocAudioStream(const char *codecName) {
 
 
     //试试能不能打开编解码器
-    int ret=avcodec_open2(&avCodecContext,codec, nullptr);
+    int ret=avcodec_open2(avCodecContext,codec, nullptr);
     if (ret<0){
         LOGI("can't open codec,please check");
         return -1;
     }
     //设置timebase
-    avCodecContext.time_base.num=1;
-    avCodecContext.time_base.den=avCodecContext.sample_rate;
-    avCodecContext.frame_size=1024;//每个frame的大小
+    avCodecContext->time_base.num=1;
+    avCodecContext->time_base.den=avCodecContext->sample_rate;
+    avCodecContext->frame_size=1024;//每个frame的大小
 
     AVCodecParameters* avCodecParameters=audioStream->codecpar;
+
     //将avCodecContext中的信息拷贝到avCodecParameters
-    ret=avcodec_parameters_from_context(avCodecParameters,&avCodecContext);
+    ret=avcodec_parameters_from_context(avCodecParameters,avCodecContext);
     if (ret<0){
         LOGI("avcodec_parameters_from_context failed,please check");
         return -1;
     }
-    this->avCodecContext=&avCodecContext;
+
 
     return 0;
 

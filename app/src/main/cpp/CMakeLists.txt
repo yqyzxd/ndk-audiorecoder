@@ -5,8 +5,9 @@ project("audiorecoder")
 
 
 set(THIRD_PARTY "${CMAKE_SOURCE_DIR}/thirdparty")
-
-set(FFMPEG_LIBS "${THIRD_PARTY}/prebuilt/${ANDROID_ABI}")
+set(FFMPEG_LIBS "${THIRD_PARTY}/prebuilt/${CMAKE_ANDROID_ARCH_ABI}/")
+#链接ffmpeng
+set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -L${FFMPEG_LIBS}")
 
 #引入头文件
 include_directories(${THIRD_PARTY}/ffmpeg/include/)
@@ -25,13 +26,19 @@ target_link_libraries(
         audiorecoder
 
         android
-        ${FFMPEG_LIBS}/libavfilter.a
-        ${FFMPEG_LIBS}/libavformat.a
-        ${FFMPEG_LIBS}/libavcodec.a
-        ${FFMPEG_LIBS}/libswresample.a
-        ${FFMPEG_LIBS}/libswscale.a
-        ${FFMPEG_LIBS}/libavutil.a
-        ${FFMPEG_LIBS}/libfdk-aac.a
-        ${FFMPEG_LIBS}/libx264.a
+        fdk-aac
+        x264
+        avcodec
+        avfilter
+        avformat
+        avutil
+        swresample
+        swscale
+
+        # 忽略顺序的方式，导入
+       # -Wl,--start-group
+       # avcodec avfilter avformat avutil swresample swscale
+      #  -Wl,--end-group
+
         z
         log)

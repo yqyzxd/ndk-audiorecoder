@@ -14,4 +14,11 @@ package com.wind.ndk.audiorecoder
 class AudioEncoder {
 
     external fun encode(pcmPath:String,audioChannels:Int,bitRate:Int,sampleRate:Int,aacPath:String)
+
+
+    companion object{
+        init {
+            System.loadLibrary("audiorecoder")
+        }
+    }
 }

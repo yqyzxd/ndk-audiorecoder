@@ -70,11 +70,12 @@ object AudioRecorder {
     }
 
     fun stop(){
+        mRecording=false
         mRecordThread?.join()
         //release里面已经调用了stop方法
         mAudioRecord?.release()
         mAudioRecord=null
-        mRecording=false
+
     }
 
     private class RecordRunnable:Runnable{
